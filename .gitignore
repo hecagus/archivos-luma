@@ -1,0 +1,10 @@
+.toolchain/
+.gradle/
+local.properties
+build/
+app/build/
+output/
+signing/
+
+/.toolchain
+__pycache__/

@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "tag": "v1.0.0",
+  "file": "Archivos-Luma-1.0.0.apk",
+  "size": 33245,
+  "sha256": "f50e5fc981b81c490f3afb5f03605146dbba89e4b33abf81f3c99bfd5ee0acd5",
+  "download": "https://github.com/hecagus/archivos-luma/releases/download/v1.0.0/Archivos-Luma-1.0.0.apk",
+  "release": "https://github.com/hecagus/archivos-luma/releases/tag/v1.0.0",
+  "repository": "https://github.com/hecagus/archivos-luma",
+  "minSdk": 29,
+  "targetSdk": 36,
+  "published": "2026-11-11"
+}

@@ -1,0 +1,19 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): false
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Archivos Luma by HecAgus, O=HecAgus, C=MX
+Signer #1 certificate SHA-256 digest: 7f978889c4882b8b1a5598f43b9c99e20a5c343200afbb8a9040e433afb52588
+Signer #1 certificate SHA-1 digest: 130b35ed27497ef904d0e1e2817df04042ce8c80
+Signer #1 certificate MD5 digest: b4384310b9265b15ab1484b8b60b64c6
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: b93fd89408f010fb0955ba47c2179eaefa1272c4810d4a787a9539cf3931986b
+Signer #1 public key SHA-1 digest: f923e2dc6f1e0da9eae3cdcb9765220d0d6020dd
+Signer #1 public key MD5 digest: c1fc1514e52b97b112d30b0ec3ca7107
+
+READY: Archivos-Luma-1.0.0.apk (33,245 bytes). Android 10+, universal, signed.
