@@ -38,14 +38,30 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public final class MainActivity extends Activity {
-    private static final int BACKGROUND = 0xff111720;
-    private static final int SURFACE = 0xff202a39;
-    private static final int TEXT = 0xfff2f6ff;
-    private static final int MUTED = 0xffb0bdcf;
-    private static final int BLUE = 0xffaac9ff;
-    private static final int DARK_BLUE = 0xff17315a;
+    private enum Section { EXPLORE, RECENT, TRASH }
+
+    private static final class Palette {
+        final int background, surface, text, muted, accent, selection;
+
+        Palette(int background, int surface, int text, int muted, int accent, int selection) {
+            this.background = background;
+            this.surface = surface;
+            this.text = text;
+            this.muted = muted;
+            this.accent = accent;
+            this.selection = selection;
+        }
+    }
+
+    private static final Palette DARK = new Palette(0xff111720, 0xff202a39, 0xfff2f6ff, 0xffb0bdcf, 0xffaac9ff, 0xff17315a);
+    private static final Palette LIGHT = new Palette(0xfff7faff, 0xffe8eef7, 0xff182536, 0xff495b71, 0xff204a86, 0xffd5e5fc);
+    private Palette colors;
+    private boolean lightTheme;
+    private String restoredQuery;
+    private Future<?> scan;
 
     private final ExecutorService disk = Executors.newSingleThreadExecutor();
     private Map<Path, String> volumes = new LinkedHashMap<>();
@@ -54,7 +70,7 @@ public final class MainActivity extends Activity {
     private Path directory;
     private Path clipboard;
     private boolean cut;
-    private boolean trash;
+    private Section section = Section.EXPLORE;
     private boolean busy;
     private int generation;
     private LinearLayout panel;
@@ -65,11 +81,18 @@ public final class MainActivity extends Activity {
     private RowAdapter adapter;
 
     @Override public void onCreate(Bundle state) {
+        lightTheme = getPreferences(MODE_PRIVATE).getBoolean("light_theme", false);
+        colors = lightTheme ? LIGHT : DARK;
+        setTheme(lightTheme ? R.style.AppThemeLight : R.style.AppTheme);
         super.onCreate(state);
         if (state != null) {
             String saved = state.getString("directory");
             if (saved != null) directory = Paths.get(saved);
-            trash = state.getBoolean("trash");
+            section = Section.valueOf(state.getString("section", Section.EXPLORE.name()));
+            String copied = state.getString("clipboard");
+            if (copied != null) clipboard = Paths.get(copied);
+            cut = state.getBoolean("cut");
+            restoredQuery = state.getString("query");
         }
     }
 
@@ -83,10 +106,14 @@ public final class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
         if (directory != null) state.putString("directory", directory.toString());
-        state.putBoolean("trash", trash);
+        state.putString("section", section.name());
+        if (clipboard != null) state.putString("clipboard", clipboard.toString());
+        state.putBoolean("cut", cut);
+        if (search != null) state.putString("query", search.getText().toString());
     }
 
     @Override protected void onDestroy() {
+        if (scan != null) scan.cancel(true);
         disk.shutdown();
         super.onDestroy();
     }
@@ -94,7 +121,7 @@ public final class MainActivity extends Activity {
     private void render() {
         generation++;
         panel = column();
-        panel.setBackgroundColor(BACKGROUND);
+        panel.setBackgroundColor(colors.background);
         panel.setFocusableInTouchMode(true);
         panel.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -108,22 +135,30 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(16), dp(12), dp(16), dp(8));
         setContentView(panel);
 
-        TextView title = label("Archivos Luma", 28, TEXT, true);
-        panel.addView(title);
-        location = label("", 14, MUTED, false);
+        LinearLayout header = row();
+        TextView title = label("Archivos Luma", 26, colors.text, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        String themeLabel = lightTheme ? "Oscuro" : "Claro";
+        Button theme = button(themeLabel, false, this::toggleTheme);
+        theme.setContentDescription("Cambiar a tema " + themeLabel.toLowerCase(Locale.ROOT));
+        header.addView(theme, new LinearLayout.LayoutParams(-2, dp(48)));
+        panel.addView(header);
+        location = label("", 14, colors.muted, false);
         location.setPadding(0, dp(4), 0, dp(12));
         panel.addView(location);
         if (!StorageAccess.granted(this)) {
             location.setText("Acceso a tus archivos");
-            TextView message = label("Activa el acceso al almacenamiento para explorar y organizar las carpetas del teléfono. Tus archivos se quedan en el dispositivo.", 17, TEXT, false);
+            TextView message = label("Activa el acceso al almacenamiento para explorar y organizar las carpetas del teléfono. Tus archivos se quedan en el dispositivo.", 17, colors.text, false);
             message.setPadding(0, dp(20), 0, dp(20));
             panel.addView(message);
             panel.addView(button("Dar acceso al almacenamiento", true, this::requestAccess));
             return;
         }
 
-        location.setText(trash ? "Papelera" : directory == null ? "Explorar" : displayPath(directory));
-        if (directory != null && !trash) {
+        location.setText(section == Section.TRASH ? "Papelera" : section == Section.RECENT
+            ? "Últimos 100 archivos modificados" : directory == null ? "Explorar" : displayPath(directory));
+        if (section == Section.RECENT) panel.addView(button("Actualizar", false, this::refresh));
+        if (directory != null) {
             LinearLayout actions = row();
             actions.addView(button("↑ Subir", false, this::goUp), weight());
             actions.addView(button("+ Carpeta", false, () -> enterName(null)), weight());
@@ -135,13 +170,13 @@ public final class MainActivity extends Activity {
             String pending = (cut ? "Mover " : "Copiar ") + name(clipboard);
             Button paste = button("Pegar", true, this::paste);
             paste.setContentDescription("Pegar. " + pending);
-            paste.setEnabled(directory != null && !trash);
+            paste.setEnabled(directory != null);
             actions.addView(paste, weight());
             actions.addView(button("Cancelar", false, () -> {
                 clipboard = null;
                 render();
             }), weight());
-            TextView selection = label(pending, 13, BLUE, false);
+            TextView selection = label(pending, 13, colors.accent, false);
             selection.setSingleLine(true);
             selection.setEllipsize(TextUtils.TruncateAt.END);
             panel.addView(selection);
@@ -151,11 +186,16 @@ public final class MainActivity extends Activity {
         search = new EditText(this);
         search.setSingleLine(true);
         search.setTextSize(15);
-        search.setTextColor(TEXT);
-        search.setHintTextColor(MUTED);
-        search.setHint(trash ? "Buscar en papelera" : "Buscar en esta ubicación");
+        search.setTextColor(colors.text);
+        search.setHintTextColor(colors.muted);
+        search.setHint(section == Section.TRASH ? "Buscar en papelera" : section == Section.RECENT
+            ? "Buscar en recientes" : "Buscar en esta ubicación");
+        if (restoredQuery != null) {
+            search.setText(restoredQuery);
+            restoredQuery = null;
+        }
         search.setContentDescription(search.getHint());
-        search.setBackground(background(SURFACE, 12));
+        search.setBackground(background(colors.surface, 12));
         search.setPadding(dp(14), 0, dp(14), 0);
         panel.addView(search, new LinearLayout.LayoutParams(-1, dp(48)));
         search.addTextChangedListener(new TextWatcher() {
@@ -175,17 +215,30 @@ public final class MainActivity extends Activity {
             return true;
         });
         panel.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        empty = label("", 16, MUTED, false);
+        empty = label("", 16, colors.muted, false);
         empty.setGravity(Gravity.CENTER);
         panel.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1));
         list.setEmptyView(empty);
 
         LinearLayout tabs = row();
-        tabs.addView(button("Explorar", !trash, () -> navigate(null, false)), weight());
-        tabs.addView(button("Papelera", trash, () -> navigate(null, true)), weight());
+        addTab(tabs, "Explorar", Section.EXPLORE);
+        addTab(tabs, "Recientes", Section.RECENT);
+        addTab(tabs, "Papelera", Section.TRASH);
         panel.addView(tabs);
         panel.requestFocus();
         refresh();
+    }
+
+    private void toggleTheme() {
+        if (busy) return;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("light_theme", !lightTheme).apply();
+        recreate();
+    }
+
+    private void addTab(LinearLayout bar, String title, Section target) {
+        Button tab = button(title, section == target, () -> navigate(null, target));
+        tab.setSelected(section == target);
+        bar.addView(tab, weight());
     }
 
     private void requestAccess() {
@@ -214,19 +267,26 @@ public final class MainActivity extends Activity {
         if (!StorageAccess.granted(this) || busy) return;
         int request = ++generation;
         Path current = directory;
-        boolean inTrash = trash;
+        Section currentSection = section;
+        if (scan != null) scan.cancel(true);
         Map<Path, String> locations = new LinkedHashMap<>(volumes);
         FileEngine engine = new FileEngine(new ArrayList<>(locations.keySet()));
         rows.clear();
         filter();
         empty.setText("Cargando…");
-        disk.execute(() -> {
+        scan = disk.submit(() -> {
             List<Row> result = new ArrayList<>();
             String failure = null;
             try {
-                if (inTrash) {
+                if (currentSection == Section.TRASH) {
                     for (FileEngine.TrashEntry entry : engine.trashEntries()) {
                         result.add(new Row(entry.original, name(entry.original), date(entry.deletedAt), false, entry));
+                    }
+                } else if (currentSection == Section.RECENT) {
+                    for (FileEngine.RecentFile file : engine.recent(100)) {
+                        String detail = date(file.modified) + " · " + Formatter.formatFileSize(this, file.size)
+                            + " · " + name(file.path.getParent());
+                        result.add(new Row(file.path, name(file.path), detail, false, null));
                     }
                 } else if (current != null) {
                     for (Path path : engine.children(current)) result.add(fileRow(path));
@@ -285,32 +345,33 @@ public final class MainActivity extends Activity {
         for (Row item : rows) {
             if (item.title.toLowerCase(Locale.ROOT).contains(query)) filtered.add(item);
         }
-        empty.setText(!query.isEmpty() ? "Sin coincidencias" : trash ? "La papelera está vacía"
-            : directory == null ? "No hay almacenamiento disponible" : "Esta carpeta está vacía");
+        empty.setText(!query.isEmpty() ? "Sin coincidencias" : section == Section.TRASH ? "La papelera está vacía"
+            : section == Section.RECENT ? "No hay archivos recientes" : directory == null
+            ? "No hay almacenamiento disponible" : "Esta carpeta está vacía");
         adapter.notifyDataSetChanged();
     }
 
-    private void navigate(Path path, boolean showTrash) {
+    private void navigate(Path path, Section target) {
         if (busy) return;
         directory = path;
-        trash = showTrash;
+        section = target;
         render();
     }
 
     private void goUp() {
-        if (directory == null || volumes.containsKey(directory)) navigate(null, false);
-        else navigate(directory.getParent(), false);
+        if (directory == null || volumes.containsKey(directory)) navigate(null, Section.EXPLORE);
+        else navigate(directory.getParent(), Section.EXPLORE);
     }
 
     @Override public void onBackPressed() {
         if (busy) return;
-        if (trash || directory != null) goUp();
+        if (section != Section.EXPLORE || directory != null) goUp();
         else super.onBackPressed();
     }
 
     private void open(Row item) {
         if (item.entry != null) menu(item);
-        else if (item.folder) navigate(item.path, false);
+        else if (item.folder) navigate(item.path, Section.EXPLORE);
         else send(item.path, false);
     }
 
@@ -325,7 +386,7 @@ public final class MainActivity extends Activity {
                 }).show();
             return;
         }
-        if (directory == null) {
+        if (directory == null && section == Section.EXPLORE) {
             open(item);
             return;
         }
@@ -497,8 +558,8 @@ public final class MainActivity extends Activity {
         button.setText(label);
         button.setTextSize(13);
         button.setAllCaps(false);
-        button.setTextColor(active ? BLUE : TEXT);
-        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(active ? DARK_BLUE : SURFACE));
+        button.setTextColor(active ? colors.accent : colors.text);
+        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(active ? colors.selection : colors.surface));
         button.setOnClickListener(view -> action.run());
         return button;
     }
@@ -525,21 +586,21 @@ public final class MainActivity extends Activity {
             setGravity(Gravity.CENTER_VERTICAL);
             setMinimumHeight(dp(65));
             setPadding(dp(4), dp(4), 0, dp(4));
-            icon = label("", 18, BLUE, true);
+            icon = label("", 18, colors.accent, true);
             icon.setGravity(Gravity.CENTER);
-            icon.setBackground(background(DARK_BLUE, 12));
+            icon.setBackground(background(colors.selection, 12));
             icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             addView(icon, new LinearLayout.LayoutParams(dp(43), dp(43)));
             LinearLayout copy = column();
             copy.setPadding(dp(12), 0, 0, 0);
-            title = label("", 16, TEXT, true);
+            title = label("", 16, colors.text, true);
             title.setSingleLine(true);
             title.setEllipsize(TextUtils.TruncateAt.END);
-            subtitle = label("", 13, MUTED, false);
+            subtitle = label("", 13, colors.muted, false);
             copy.addView(title);
             copy.addView(subtitle);
             addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
-            actions = label("⋮", 24, BLUE, true);
+            actions = label("⋮", 24, colors.accent, true);
             actions.setGravity(Gravity.CENTER);
             actions.setFocusable(false);
             addView(actions, new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -549,7 +610,7 @@ public final class MainActivity extends Activity {
             icon.setText(row.entry != null ? "↶" : row.folder ? "▰" : "▤");
             title.setText(row.title);
             subtitle.setText(row.subtitle);
-            actions.setText(directory == null && !trash ? "›" : "⋮");
+            actions.setText(directory == null && section == Section.EXPLORE ? "›" : "⋮");
             actions.setContentDescription("Opciones de " + row.title);
             actions.setOnClickListener(view -> menu(row));
             setOnClickListener(view -> open(row));

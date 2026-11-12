@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -67,6 +68,18 @@ public final class FileEngineTest {
             Files.createSymbolicLink(downloads.resolve("enlace"), docs);
             reject(() -> engine.transfer(downloads, docs, false));
             check(engine.children(docs).isEmpty(), "copia fallida no publica contenido parcial");
+            Path newest = write(secondary.resolve("reciente.pdf"), "archivo nuevo");
+            Path hidden = write(primary.resolve(".oculto"), "oculto");
+            Path restricted = write(Files.createDirectories(primary.resolve("Android/data/demo")).resolve("privado"), "privado");
+            for (Path path : List.of(newest, hidden, restricted)) {
+                Files.setLastModifiedTime(path, FileTime.fromMillis(System.currentTimeMillis() + 60_000));
+            }
+            List<FileEngine.RecentFile> recent = engine.recent(100);
+            check(recent.get(0).path.equals(newest), "recientes ordenados entre volúmenes");
+            check(recent.stream().anyMatch(file -> file.path.equals(nested.resolve("foto.jpg"))), "incluye subcarpetas");
+            check(recent.stream().noneMatch(file -> file.path.equals(hidden) || file.path.equals(restricted)
+                || file.path.equals(downloads.resolve("enlace"))), "excluye archivos ocultos, privados y enlaces");
+            check(engine.recent(1).size() == 1 && engine.recent(1).get(0).size == Files.size(newest), "límite y tamaño");
             System.out.println(checks + " comprobaciones de archivos aprobadas.");
         } finally {
             try (Stream<Path> paths = Files.walk(workspace)) {

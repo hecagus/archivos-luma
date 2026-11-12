@@ -16,4 +16,4 @@ Signer #1 public key SHA-256 digest: b93fd89408f010fb0955ba47c2179eaefa1272c4810
 Signer #1 public key SHA-1 digest: f923e2dc6f1e0da9eae3cdcb9765220d0d6020dd
 Signer #1 public key MD5 digest: c1fc1514e52b97b112d30b0ec3ca7107
 
-READY: Archivos-Luma-1.0.0.apk (33,245 bytes). Android 10+, universal, signed.
+READY: Archivos-Luma-1.1.0.apk (37,341 bytes). Android 10+, universal, signed.

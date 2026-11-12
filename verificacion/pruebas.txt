@@ -1,1 +1,2 @@
-26 comprobaciones de archivos aprobadas.
+30 comprobaciones de archivos aprobadas.
+Robolectric (Android 10): apertura de Recientes y persistencia del tema al recrear la actividad verificadas.

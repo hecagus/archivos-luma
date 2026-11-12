@@ -12,6 +12,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -35,8 +36,7 @@ final class FileEngine {
         Path normalized = path.toAbsolutePath().normalize();
         Path root = rootOf(normalized);
         Path relative = root.relativize(normalized);
-        if (relative.startsWith(TRASH) || relative.startsWith("Android/data")
-                || relative.startsWith("Android/obb")) {
+        if (protectedPath(relative)) {
             throw new IOException("La carpeta está protegida.");
         }
         Path cursor = root;
@@ -45,6 +45,66 @@ final class FileEngine {
             if (Files.isSymbolicLink(cursor)) throw new IOException("El enlace no se puede abrir.");
         }
         return normalized;
+    }
+
+    private static boolean protectedPath(Path relative) {
+        return relative.startsWith(TRASH) || relative.startsWith("Android/data")
+            || relative.startsWith("Android/obb");
+    }
+
+    List<RecentFile> recent(int limit) throws IOException {
+        if (limit <= 0) return new ArrayList<>();
+        Comparator<RecentFile> oldestFirst = Comparator
+            .comparingLong((RecentFile file) -> file.modified)
+            .thenComparing(file -> file.path);
+        PriorityQueue<RecentFile> newest = new PriorityQueue<>(limit, oldestFirst);
+        for (Path root : roots) {
+            if (Thread.currentThread().isInterrupted()) break;
+            Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+                @Override public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+                    if (Thread.currentThread().isInterrupted()) return FileVisitResult.TERMINATE;
+                    if (directory.equals(root)) return FileVisitResult.CONTINUE;
+                    return directory.getFileName().toString().startsWith(".") || protectedPath(root.relativize(directory))
+                        ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                }
+
+                @Override public FileVisitResult visitFile(Path path, BasicFileAttributes attributes) {
+                    if (Thread.currentThread().isInterrupted()) return FileVisitResult.TERMINATE;
+                    if (attributes.isRegularFile() && !path.getFileName().toString().startsWith(".")) {
+                        RecentFile item = new RecentFile(path, attributes.lastModifiedTime().toMillis(), attributes.size());
+                        if (newest.size() < limit) newest.add(item);
+                        else if (oldestFirst.compare(item, newest.peek()) > 0) {
+                            newest.remove();
+                            newest.add(item);
+                        }
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override public FileVisitResult visitFileFailed(Path path, IOException error) {
+                    return Thread.currentThread().isInterrupted() ? FileVisitResult.TERMINATE : FileVisitResult.CONTINUE;
+                }
+
+                @Override public FileVisitResult postVisitDirectory(Path path, IOException error) {
+                    return Thread.currentThread().isInterrupted() ? FileVisitResult.TERMINATE : FileVisitResult.CONTINUE;
+                }
+            });
+        }
+        List<RecentFile> result = new ArrayList<>(newest);
+        result.sort(oldestFirst.reversed());
+        return result;
+    }
+
+    static final class RecentFile {
+        final Path path;
+        final long modified;
+        final long size;
+
+        RecentFile(Path path, long modified, long size) {
+            this.path = path;
+            this.modified = modified;
+            this.size = size;
+        }
     }
 
     List<Path> children(Path directory) throws IOException {
